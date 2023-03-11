@@ -48,10 +48,15 @@ local vs = range(numPlanes):mapi(function()
 end)
 -- space them each out a bit?
 local vavg = vs:mapi(function(v)
-	return matrix{v[1], v[2], v[3]} * v[4] * v[5]	-- TODO weight by push and size
-end):sum() / numPlanes
+	return matrix{v[1], v[2], v[3], 1} * v[4] * v[5]	-- TODO weight by push and size
+end):sum()
+vavg = vavg / vavg[4]
 vs = vs:mapi(function(v)
-	local nv = (matrix{v[1], v[2], v[3]} - vavg):unit()
+	local nv = matrix{
+		v[1] - vavg[1],
+		v[2] - vavg[2],
+		v[3] - vavg[3],
+	}:unit()
 	v[1] = nv[1]
 	v[2] = nv[2]
 	v[3] = nv[3]
