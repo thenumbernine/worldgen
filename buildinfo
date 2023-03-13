@@ -1,0 +1,9 @@
+distName='worldgen'
+distType='app'
+depends:append{'../Common', '../Tensor', '../Image'}
+
+--[[
+compiler = 'clang++'
+linker = 'clang++'
+--]]
+
