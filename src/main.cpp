@@ -54,6 +54,35 @@ auto lookupLinear(auto m, real f) {
 };
 
 
+template<typename real>
+auto makeEquirectangular(Tensor::int2 size) {
+	return Tensor::Grid<Tensor::vec<real,2>, 2>(size, [&](Tensor::int2 i) {
+		real lon = ((i.x - .5)/(real)size.x - .5) * M_PI * 2.;// [-pi, pi]
+		real lat = ((i.y - .5)/(real)size.y - .5) * M_PI;		// [-pi/2, pi/2]
+		return Tensor::vec<real,2>{lon, lat};
+	});
+}
+
+auto clamp(auto x, auto a, auto b) {
+	return std::max(std::min(x, b), a);
+}
+
+template<typename real, bool squareTheCircle = false>
+auto makeAzimuthal(Tensor::int2 size) {
+	using real2 = Tensor::vec<real,2>;
+	return Tensor::Grid<real2, 2>(size, [&](Tensor::int2 i) {
+		real2 f = (((real2)i + .5)/(real2)size - .5) * 2.;	//[-1,1]^2
+		if (squareTheCircle) {	//square the circle	
+			real maxp = std::max(fabs(f.x), fabs(f.y));
+			real maxf = maxp == 0 ? 0 : (f / maxp).length();
+			f /= maxf;
+		}
+		real lat = (clamp(f.length(), -.999, .999) - .5) * M_PI;
+		real lon = atan2(f.y, f.x);
+		return Tensor::vec<real,2>{lon, lat};
+	});
+}
+
 int main() {
 	using namespace WorldGen;
 	using namespace Tensor;
@@ -63,26 +92,23 @@ int main() {
 
 	srand(time(0));
 
+#if 0	//equirectangular 2x1 (same as nasa bluemarble pics?)
 	int n = 1080;
 	auto size = int2{2*n, n};
-	
-	auto lonlat = Grid<real2, 2>(size, [&](int2 i) {
-		real lon = ((i.x-.5)/n - 1) * M_PI;// [-pi, pi]
-		real lat = ((i.y-.5)/n - .5) * M_PI;// [-pi/2, pi/2]
-		return real2{lon, lat};
-	});
+	auto lonlat = makeEquirectangular<real>(size);
+#endif
+#if 1	//equi-square
+	int n = 1080;
+	auto size = int2{n, n};
+	auto lonlat = makeEquirectangular<real>(size);
+#endif
+#if 0	// azimuthal equi-square
+	int n = 1080;
+	auto size = int2{n,n};
+	auto lonlat = makeAzimuthal<real>(size);
+#endif
 
-	auto dxs = Grid<real2, 2>(size, [&](int2 i) -> real2 {
-		auto [lon, lat] = lonlat(i);
-		real dlon = (2.*M_PI)/(real)size.x;
-		real dlat = M_PI/(real)size.y * cos(lat);
-		return {dlon, dlat};
-	});
-
-	auto areas = Grid<real,2>(size, [&](int2 i) -> real {
-		return dxs(i).product();
-	});
-
+	//sphere pts
 	auto pts = Grid<real3, 2>(size, [&](int2 is) {
 		auto [lon, lat] = lonlat(is);
 		return real3{
@@ -90,6 +116,25 @@ int main() {
 			cos(lat) * sin(lon),
 			sin(lat)
 		};
+	});
+
+	auto dxs = Grid<real2, 2>(size, [&](int2 ij) -> real2 {
+		//// analytical ...
+		//auto [lon, lat] = lonlat(ij);
+		//real dlon = (2.*M_PI)/(real)size.x;
+		//real dlat = M_PI/(real)size.y * cos(lat);
+		//return {dlon, dlat};
+		//// numerical ...
+		int2 ijL = (ij - 1 + size) % size;
+		int2 ijR = (ij + 1) % size;
+		return {
+			(pts(int2{ijR.x, ij.y}) - pts(int2{ijL.x, ij.y})).length() / 2.,
+			(pts(int2{ij.x, ijR.y}) - pts(int2{ij.x, ijL.y})).length() / 2.,
+		};
+	});
+
+	auto areas = Grid<real,2>(size, [&](int2 i) -> real {
+		return dxs(i).product();
 	});
 
 	auto seed = real3([](int i) { return (real)(rand() & 0xffff); });
