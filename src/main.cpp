@@ -281,5 +281,5 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 			(*img)(i.x, i.y, k) = (uint8_t)c(k);
 		}
 	}
-	Image::system->write("tmp.png", img);
+	Image::system->write("out.png", img);
 }

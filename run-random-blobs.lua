@@ -196,4 +196,4 @@ local img = Image(2*n, n, 3, 'double', function(i,j)
 		return 1,l,0
 	end
 end)
-img:save'tmp.png'
+img:save'out.png'

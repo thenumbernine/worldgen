@@ -205,4 +205,4 @@ local img = Image(size[1], size[2], 3, 'double', function(i,j)
 		return lookupLinear(seaGrad, -h):unpack()
 	end
 end)
-img:save'tmp.png'
+img:save'out.png'
