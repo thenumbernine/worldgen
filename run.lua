@@ -20,9 +20,9 @@ m = size:lambda(function(i,j)
 	c[3] = math.cos(lat) * math.cos(lon)	-- x
 	c[4] = math.cos(lat) * math.sin(lon)	-- y
 	c[5] = math.sin(lat)					-- z
-	c[6] = 0								-- h
 	return c
 end)
+
 
 local seed = range(3):mapi(function() return math.random(65536) end)
 local function f(x,y,z,seed)
@@ -39,55 +39,99 @@ local function f(x,y,z,seed)
 	end
 	return h
 end
-for i=1,size[1] do
-	for j=1,size[2] do
-		local c = m[i][j]
-		c[6] = f(c[3],c[4],c[5],seed) - .2
-	end
-end
+
+local hs = size:lambda(function(i,j)
+	local c = m[i][j]
+	return f(c[3],c[4],c[5],seed) - .2
+end)
 
 -- ok now erosion
 -- 1) get grad at point
 -- 2) move some height along grad
 -- 3) ???
 -- 4) profit
-for pass=1,1 do
+local numPasses = 1
+--local numPasses = 10
+--local numPasses = 100  -- too much water
+for pass=1,numPasses do
+	local nhs = matrix(hs)
+	print('pass '..pass..'/'..numPasses)
 	for i=1,size[1] do
 		for j=1,size[2] do
+			local c = m[i][j]
 			local iR = (i%size[1])+1
 			local iL = ((i-2)%size[1])+1
 			local jR = (j%size[2])+1
 			local jL = ((j-2)%size[2])+1
+			local dlon = math.abs((2*math.pi)/size[1])
+			local dlat = math.abs(math.pi/size[2] * math.cos(c[2]))
 			local grad = matrix{
-				m[iR][j][6] - m[iL][j][6],
-				m[i][jR][6] - m[i][jL][6],
+				(hs[iR][j] - hs[iL][j]) / dlon,
+				(hs[i][jR] - hs[i][jL]) / dlat,
 			}-- * 3
 			grad = grad:unit()
-			local h = m[i][j][6]
+			local h = hs[i][j]
 			local some = h * math.random()
-			m[i][j][6] = m[i][j][6] - some
+			nhs[i][j] = nhs[i][j] - some
 			local dsti = math.round(i+1*grad[1])
 			dsti = ((dsti-1)%size[1])+1
 			local dstj = math.round(j+1*grad[2])
 			dstj = ((dstj-1)%size[2])+1
-			m[dsti][dstj][6] = m[dsti][dstj][6] + some
+			nhs[dsti][dstj] = nhs[dsti][dstj] + some
 		end
 	end
+	hs = nhs
 end
 
+-- [[ now smooth a bit
+-- hmm this is always looking bad ... 
+local function gaussian(A, kernelSize, sigma, calcMetric)
+	local size = A:size()
+	kernelSize = kernelSize or 10
+	sigma = sigma or 1/100
+	return size:lambda(function(i,j)
+		local sum = 0
+		local total = 0
+		for u=-kernelSize,kernelSize do
+			for v=-kernelSize,kernelSize do
+				local srci = ((i-1+u)%size[1])+1
+				local srcj = ((j-1+v)%size[2])+1
+				local metric = calcMetric(srci, srcj)
+				local fuv = matrix{u, v}
+				local dsq = fuv * metric * fuv
+				local area = metric:det()
+				local infl = math.exp(-dsq / (sigma*sigma)) * area
+				sum = sum + A[srci][srcj] * infl
+				total = total + infl
+			end
+		end
+		return sum / total
+	end)
+end
+hs = gaussian(hs, 10, 1/100, function(i,j)
+	local lon = m[i][j][2]
+	local dlon = math.abs((2*math.pi)/size[1])
+	local dlat = math.abs(math.pi/size[2] * math.cos(lon))
+	return matrix{{dlon, 0},{0,dlat}}
+end)
+--]]
 
 local function gethrange()
 	local hmin = math.huge
 	local hmax = -math.huge
 	for i=1,size[1] do
 		for j=1,size[2] do
-			local c = m[i][j]
-			local h = c[6]
+			local h = hs[i][j]
 			hmin = math.min(hmin, h)
 			hmax = math.max(hmax, h)
 		end
 	end
 	return hmin, hmax
+end
+
+local function getHistogram(n, hmin, hmax)
+	n = n or 200
+	local h = matrix{n}
 end
 
 local totalArea = 0
@@ -99,7 +143,7 @@ for i=1,size[1] do
 		local dlat = math.pi/size[2] * math.cos(c[2])
 		local dA = dlat * dlon
 		totalArea = totalArea + dA
-		if c[6] > 0 then
+		if hs[i][j] > 0 then
 			landArea = landArea + dA
 		end
 	end
@@ -114,15 +158,14 @@ print('land area percent', (landArea / totalArea * 100)..'%')
 -- [[
 for i=1,size[1] do
 	for j=1,size[2] do
-		local c = m[i][j]
-		local h = c[6]
+		local h = hs[i][j]
 		-- map above zero to [1,0] and below 0 to [0,-1]
 		if h > 0 then
 			h = h / hmax
 		else
 			h = -h / hmin
 		end
-		c[6] = h
+		hs[i][j] = h
 	end
 end
 --]]
@@ -153,9 +196,9 @@ local function lookupLinear(m, f)
 end
 
 -- hmm, I've got my Image library, and I've got my matrix lua library, and I've got my matrix ffi library ... hmmmmmmm
+local hmin, hmax = gethrange()
 local img = Image(size[1], size[2], 3, 'double', function(i,j)
-	local h = m[i+1][j+1][6]
-	local l = (h - hmin) / (hmax - hmin)
+	local h = hs[i+1][j+1]
 	if h > 0 then
 		return lookupLinear(landGrad, h):unpack()
 	else
