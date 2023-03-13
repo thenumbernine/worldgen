@@ -36,50 +36,27 @@ struct Noise {
 	static constexpr std::array<uint8_t, 512> perm = [](){
 		std::array<uint8_t, 512> out;
 		for (int i = 0; i < 512; ++i) {
-			out[i] = p[i&0xff];
+			out[i] = p[i & 0xff];
 		}
 		return out;
 	}();
 
 	static real noise(real3 const pt) {
-		constexpr const real G3 = 1./6.;
-		
-		auto xs = Tensor::tensor<real, 4, 3>{};
-		auto is = Tensor::tensor<int, 4, 3>{{}, {}, {}, {1}};
-		
 		auto i = (int3)(pt + pt.sum() * (1./3.));
-		xs[0] = pt - ((real3)i - i.sum() * G3);
-		
-		if (xs[0].x >= xs[0].y) {
-			if (xs[0].y >= xs[0].z) {
-				is[1] = {1, 0, 0}; is[2] = {1, 1, 0};	//XYZ
-			} else if (xs[0].x >= xs[0].z) {
-				is[1] = {1, 0, 0}; is[2] = {1, 0, 1};	//XZY
-			} else {
-				is[1] = {0, 0, 1}; is[2] = {1, 0, 1};	//ZXY
-			}
-		} else {
-			if (xs[0].y < xs[0].z) {
-				is[1] = {0, 0, 1}; is[2] = {0, 1, 1};	//ZYX
-			} else if (xs[0].x < xs[0].z) { 
-				is[1] = {0, 1, 0}; is[2] = {0, 1, 1};	//YZX
-			} else {
-				is[1] = {0, 1, 0}; is[2] = {1, 1, 0};	//YXZ
-			}
-		}
-		for (int k = 1; k < 4; ++k) {
-			xs[k] = xs[0] - is[k] + k*G3;
-		}
-		auto sq = Tensor::vec<real, 4>([&](int k) -> real { return xs[k].lenSq(); });
-		auto t = .6 - sq;
-		
+		auto x = pt - ((real3)i - i.sum() * (1./6.));
+		std::vector<size_t> sis = {0,1,2};
+		std::stable_sort(sis.begin(), sis.end(), [&](size_t a, size_t b) { return x[a] < x[b]; });
+		auto is = Tensor::tensor<int, 4, 3>{{}, {}, {}, {1}};
+		is[1][sis[2]] = 1;
+		is[2][sis[2]] = 1;
+		is[2][sis[1]] = 1;
 		auto pow4 = [](auto x) { return x * x * x * x; };
 		Tensor::uchar3 ib = i;
-		
 		return 32. * Tensor::tensor<real, 4>([&](int k) -> real {
 			auto const & ik = is[k];
-			auto const tk = t[k];
-			return tk < 0 ? 0 : pow4(tk) * (xs[k] * grad3[
+			auto xk = x - ik + k * (1./6.);
+			auto const tk = .6 - xk.lenSq();
+			return tk < 0 ? 0 : pow4(tk) * (xk * grad3[
 				perm[ib.x + ik.x + perm[ib.y + ik.y + perm[ib.z + ik.z]]] % 12
 			]);
 		}).sum();

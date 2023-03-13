@@ -66,8 +66,8 @@ for pass=1,numPasses do
 			local dlon = math.abs((2*math.pi)/size[1])
 			local dlat = math.abs(math.pi/size[2] * math.cos(c[2]))
 			local grad = matrix{
-				(hs[iR][j] - hs[iL][j]) / dlon,
-				(hs[i][jR] - hs[i][jL]) / dlat,
+				(hs[iR][j] - hs[iL][j]) / (2 * dlon),
+				(hs[i][jR] - hs[i][jL]) / (2 * dlat),
 			}-- * 3
 			grad = grad:unit()
 			local h = hs[i][j]
@@ -83,7 +83,7 @@ for pass=1,numPasses do
 	hs = nhs
 end
 
--- [[ now smooth a bit
+--[[ now smooth a bit
 -- hmm this is always looking bad ... 
 local function gaussian(A, kernelSize, sigma, calcMetric)
 	local size = A:size()
