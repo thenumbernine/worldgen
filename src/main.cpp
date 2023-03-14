@@ -7,9 +7,11 @@
 #include "Image/Image.h"
 #include "Common/Macros.h"
 
+
 auto rad(auto x) { return x * M_PI / 180.; }
 auto deg(auto x) { return x * 180. / M_PI; }
 auto round(auto x) { return floor(x + .5); }
+auto sqr(auto x) { return x*x; };
 
 template<typename T, int N>
 auto getrange(Tensor::Grid<T, N> const & m) {
@@ -22,6 +24,35 @@ auto getrange(Tensor::Grid<T, N> const & m) {
 	return Tensor::vec<T,2>{vmin, vmax};
 };
 
+template<typename real, typename Grid>
+auto gaussian(
+	Grid const & A,
+	int kernelSize,
+	real sigma,
+	auto calcMetric
+) {
+	using Type = Grid::Type;
+	using int2 = Tensor::int2;
+	using real2 = Tensor::vec<real,2>;
+	auto size = A.size;
+	return Grid(size, [&](int2 ij) -> Type {
+		Type sum = {};
+		Type total = {};
+		for (int u = -kernelSize; u <= kernelSize; ++u) {
+			for (int v = -kernelSize; v <= kernelSize; ++v) {
+				auto uv = real2{(real)u, (real)v};
+				int2 srcij = ((int2)((real2)ij + uv) + size) % size;
+				auto g = calcMetric(srcij);
+				real dsq = uv * g * uv;
+				real area = determinant(g);
+				real infl = exp(-dsq / (sigma*sigma)) * area;
+				sum += A(srcij) * infl;
+				total += infl;
+			}
+		}
+		return sum / total;
+	});
+};
 
 // weighted by surface area
 // hs holds the value to be binned
@@ -43,6 +74,10 @@ auto histogram(
 
 template<typename real>
 auto lookupLinear(auto m, real f) {
+	if (!std::isfinite(f)) {
+		//throw Common::Exception() << "lookupLinear got a NaN, this is gonna segfault if i try to look it up";
+		return Tensor::vec<real,3>(127,127,127);
+	}
 	real i = f*(m.size()-1);
 	int j = (int)i;
 	real s = i - j;
@@ -68,7 +103,7 @@ auto clamp(auto x, auto a, auto b) {
 }
 
 template<typename real, bool squareTheCircle = false>
-auto makeAzimuthal(Tensor::int2 size) {
+auto makeAzimuthalEquiDist(Tensor::int2 size) {
 	using real2 = Tensor::vec<real,2>;
 	return Tensor::Grid<real2, 2>(size, [&](Tensor::int2 i) {
 		real2 f = (((real2)i + .5)/(real2)size - .5) * 2.;	//[-1,1]^2
@@ -77,8 +112,41 @@ auto makeAzimuthal(Tensor::int2 size) {
 			real maxf = maxp == 0 ? 0 : (f / maxp).length();
 			f /= maxf;
 		}
-		real lat = (clamp(f.length(), -.999, .999) - .5) * M_PI;
+		real r = f.length();
+		r = std::min(r, .999);
+		real lat = (r - .5) * M_PI;
 		real lon = atan2(f.y, f.x);
+		return Tensor::vec<real,2>{lon, lat};
+	});
+}
+
+template<typename real>
+auto makeLambertAzimuthalEquiArea(Tensor::int2 size) {
+	using real2 = Tensor::vec<real,2>;
+	return Tensor::Grid<real2, 2>(size, [&](Tensor::int2 i) {
+		real2 f = (((real2)i + .5)/(real2)size - .5) * 2.;	//[-1,1]^2
+		real r = f.length();
+		r = std::min(r, .999);
+		r = asin(r) / (.5 * M_PI);
+		real lat = (r - .5) * M_PI;
+		real lon = atan2(f.y, f.x);
+		return Tensor::vec<real,2>{lon, lat};
+	});
+}
+
+template<typename real>
+auto makePolesAtCorners(Tensor::int2 size) {
+	using real2 = Tensor::vec<real,2>;
+	return Tensor::Grid<real2, 2>(size, [&](Tensor::int2 i) {
+		real2 f = (((real2)i + .5)/(real2)size - .5) * 2.;	//[-1,1]^2
+		real lat = f * real2(-.5, .5);	// flip y either here or in image write
+		real lon = f * real2(.5, .5);
+		real div = 1. - fabs(lat);
+		if (div != 0) lon /= div;
+		lat = clamp(lat, -1., 1.);
+		lon = clamp(lon, -1., 1.);
+		lat *= M_PI * .5;
+		lon *= M_PI;
 		return Tensor::vec<real,2>{lon, lat};
 	});
 }
@@ -89,23 +157,34 @@ int main() {
 	using real = double;
 	using real2 = vec<real,2>;
 	using real3 = vec<real,3>;
+	using real2x2 = Tensor::mat<real,2,2>;
 
 	srand(time(0));
 
+#if 0
+	auto size = int2(2,1) * 1080;	// 2:1 for equirectangular
+#endif
+#if 1
+	auto size = int2(1080);			// 1:1 for everything else
+#endif
+
 #if 0	//equirectangular 2x1 (same as nasa bluemarble pics?)
-	int n = 1080;
-	auto size = int2{2*n, n};
 	auto lonlat = makeEquirectangular<real>(size);
 #endif
 #if 1	//equi-square
-	int n = 1080;
-	auto size = int2{n, n};
 	auto lonlat = makeEquirectangular<real>(size);
 #endif
-#if 0	// azimuthal equi-square
-	int n = 1080;
-	auto size = int2{n,n};
-	auto lonlat = makeAzimuthal<real>(size);
+#if 0	// azimuthal equi-dist circle
+	auto lonlat = makeAzimuthalEquiDist<real, false>(size);
+#endif
+#if 0
+	auto lonlat = makeLambertAzimuthalEquiArea<real>(size);
+#endif
+#if 0	// azimuthal equi-dist square
+	auto lonlat = makeAzimuthalEquiDist<real, true>(size);
+#endif
+#if 0 // square with poles at corners
+	auto lonlat = makePolesAtCorners<real>(size);
 #endif
 
 	//sphere pts
@@ -131,6 +210,12 @@ int main() {
 			(pts(int2{ijR.x, ij.y}) - pts(int2{ijL.x, ij.y})).length() / 2.,
 			(pts(int2{ij.x, ijR.y}) - pts(int2{ij.x, ijL.y})).length() / 2.,
 		};
+	});
+
+	auto metrics = Grid<real2x2, 2>(size, [&](int2 ij) {
+		auto [dlon, dlat] = dxs(ij);
+		// TODO proper inner product from the delta vectors
+		return real2x2{{dlon*dlon, 0},{0,dlat*dlat}};
 	});
 
 	auto areas = Grid<real,2>(size, [&](int2 i) -> real {
@@ -187,40 +272,11 @@ std::cout << "initial h range " << getrange(hs) << std::endl;
 		}
 	}
 
-#if 0	// now smooth a bit
-	// hmm this is always looking bad ... 
-	auto gaussian = [](Grid<real, 2> const & A, int kernelSize, real sigma, auto calcMetric) 
-	-> Grid<real, 2>
-	{
-		auto size = A.size;
-		return Grid<real, 2>(size, [&](int2 ij) -> real {
-			real sum = 0;
-			real total = 0;
-			for (int u = -kernelSize; u <= kernelSize; ++u) {
-				for (int v = -kernelSize; v <= kernelSize; ++v) {
-					auto [i,j] = ij;
-					int srci = (int)((real)i+u)%size.x;
-					int srcj = (int)((real)j+v)%size.y;
-					int2 srcij = {srci,srcj};
-					auto g = calcMetric(srcij);
-					auto uv = real2{(real)u, (real)v};
-					real dsq = uv * g * uv;
-					real area = determinant(g);
-					real infl = exp(-dsq / (sigma*sigma)) * area;
-					sum += A(srcij) * infl;
-					total += infl;
-				}
-			}
-			return sum / total;
-		});
-	};
-	hs = gaussian(hs, 10, 1/100, [&](int2 ij) -> mat<real,2,2> {
-		auto [dlon, dlat] = dxs(ij);
-		return mat<real,2,2>{{dlon, 0},{0,dlat}};
-	});
-#endif
+// nah cuz blur undoes the erosion ...
+//	hs = gaussian<real>(hs, 10, 100, [&](int2 ij) { return metrics(ij); });
 
 	// use histogram to determine sealevel at 70% lowest height of all land
+// why is this putting random water dots everywhere?
 #if 0
 	{
 		int numbins = 200;
@@ -250,23 +306,7 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 	}
 #endif 
 
-	{
-		real totalArea = 0;
-		real landArea = 0;
-		for (auto i : hs.range()) {
-			real dA = areas(i);
-			totalArea += dA;
-			if (hs(i) > 0) {
-				landArea += dA;
-			}
-		}
-		std::cout << "total area " << totalArea << std::endl;
-		std::cout << "total area error " << fabs(1. - totalArea / (4 * M_PI)) << std::endl;
-		std::cout << "land area " << landArea << std::endl;
-		std::cout << "land area percent " << (landArea / totalArea * 100) << "%" << std::endl;
-	}
-
-#if 1
+#if 1	// normalize altitude to [-1,1] while maintaining 0 (since it is at our desired land covering %age)
 	{
 		auto [hmin, hmax] = getrange(hs);
 		std::cout << "h range " << hmin << " " << hmax << std::endl;
@@ -281,6 +321,59 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 	}
 #endif
 
+	// 1) calc sealevel temp by latitude
+	auto temps = Grid<real, 2>(size, [&](int2 i) -> real {
+		auto [lon, lat] = lonlat(i);
+		// https://commons.wikimedia.org/wiki/File:Relationship_between_latitude_vs._temperature_and_precipitation.png
+		return 25. - 30. * sqr(lat/(M_PI*.5));	// in Celsius
+	});
+
+	// ... decrease temp at land (dont at sea)
+	for (auto i : temps.range()) {
+		if (hs(i) < 0) {
+			temps(i) += 10; // land temps about 10 degrees C less than sea temps
+		}
+	}
+
+	// blur to get rid of hard edges from land/sea boundary
+	temps = gaussian<real>(temps, 10, 100, [&](int2 ij) { return metrics(ij); });
+
+	// TODO blur
+	// then blur/smooth/diffuse temp
+	// then push temp east thx to prevailing winds
+
+	// ... decrease temp by elevation
+	real maxAlt = 9000;	// ht of mt everest ish
+	for (auto i : temps.range()) {
+		real h = hs(i);
+
+		// snow level ...
+		// https://www.researchgate.net/publication/232976650_Variation_in_Temperature_With_Altitude_and_Latitude
+		// " One degree increase in latitude is roughly equal to a 122 m decrease in elevation, and to a 0.55 o C temperature decrease."
+		// http://www.ces.fau.edu/nasa/module-3/why-does-temperature-vary/elevation.php
+		// " For every 100-meter increase in elevation, the average temperature decreases by 0.7°C."
+		temps(i) -= std::max(0., h) * maxAlt / 100.;
+	}
+
+	{
+		real totalArea = 0;
+		real landArea = 0;
+		real landAreaBy2D = 0;
+		for (auto i : hs.range()) {
+			real dA = areas(i);
+			totalArea += dA;
+			if (hs(i) > 0) {
+				landArea += dA;
+				landAreaBy2D++;
+			}
+		}
+		std::cout << "total area by sphere " << totalArea << std::endl;
+		std::cout << "land area by sphere " << landArea << std::endl;
+		std::cout << "total area error by sphere " << fabs(1. - totalArea / (4 * M_PI)) << std::endl;
+		std::cout << "land area percent by sphere " << (landArea / totalArea * 100) << "%" << std::endl;
+		std::cout << "land area percent by 2D projection " << (landAreaBy2D / (real)size.product() * 100) << "%" << std::endl;
+	}
+
 	std::array landGrad = {
 		real3(0x27, 0xa5, 0x2a),
 		real3(0x34, 0x88, 0x3b),
@@ -290,7 +383,7 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 		real3(0x87, 0x09, 0x00),
 		real3(0x73, 0x19, 0x02),
 	};
-	
+
 	std::array seaGrad = {
 		real3(0x00, 0x00, 0xff),
 		real3(0x00, 0x00, 0x3f),
@@ -301,30 +394,48 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 		real3(0xff, 0xff, 0xff),
 	};
 
+	std::array iceGrad = {
+		real3(0x7f, 0x7f, 0xff),
+		real3(0xcf, 0xcf, 0xff),
+	};
+
+	std::array tempGrad = {
+		real3(0, 0, 0xff),
+		real3(0xff, 0, 0),
+	};
+
+	{
+		auto tempRange = getrange(temps);
+		auto img = std::make_shared<Image::Image>(size);
+		for (auto i : temps.range()) {
+			real temp = temps(i);
+			real3 c = lookupLinear(tempGrad, (temp - tempRange[0]) / (tempRange[1] - tempRange[0]));
+			*(uchar3*)&(*img)(i.x, i.y) = (uchar3)c;
+		}
+		Image::system->write("temp.png", img);
+	}
+	
 	// hmm, I've got my Image library, and I've got my matrix lua library, and I've got my matrix ffi library ... hmmmmmmm
-	real arcticCircleLat = 80;
-	real maxAlt = 9000;
-	//real snowAlt = 500;
-	real snowAlt = 3500;
 	auto img = std::make_shared<Image::Image>(size);
 	for (auto i : hs.range()) {
-		auto [lon, lat] = lonlat(i);
 		real h = hs(i);
+		real temp = temps(i);
+		
 		real3 c;
 		if (h < 0) {
-			c = lookupLinear(seaGrad, -h);
-		} else {
-			if (fabs(lat) > rad(arcticCircleLat)) {
-				c = lookupLinear(snowGrad, h);
-			} else if (h * maxAlt > snowAlt) {
-				c = lookupLinear(snowGrad, (h - snowAlt / maxAlt) / (1. - snowAlt / maxAlt) );
+			if (temp < 0) {
+				c = lookupLinear(iceGrad, -h);
 			} else {
-				c = lookupLinear(landGrad, h / (snowAlt / maxAlt));
+				c = lookupLinear(seaGrad, -h);
+			}
+		} else {
+			if (temp < 0) {
+				c = lookupLinear(snowGrad, h);
+			} else {
+				c = lookupLinear(landGrad, h);
 			}
 		}
-		for (int k = 0; k < 3; ++k) {
-			(*img)(i.x, i.y, k) = (uint8_t)c(k);
-		}
+		*(uchar3*)&(*img)(i.x, i.y) = (uchar3)c;
 	}
 	Image::system->write("out.png", img);
 }
