@@ -3,6 +3,9 @@
 #include <array>
 #include "Tensor/Tensor.h"
 
+// simplex noise
+// http://staffwww.itn.liu.se/~stegu/simplexnoise/simplexnoise.pdf
+
 namespace WorldGen {
 
 template<typename real_>
