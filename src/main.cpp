@@ -161,10 +161,10 @@ int main() {
 
 	srand(time(0));
 
-#if 0
+#if 1
 	auto size = int2(2,1) * 1080;	// 2:1 for equirectangular
 #endif
-#if 1
+#if 0
 	auto size = int2(1080);			// 1:1 for everything else
 #endif
 
