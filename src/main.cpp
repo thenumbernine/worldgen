@@ -78,12 +78,12 @@ auto lookupLinear(auto m, real f) {
 		//throw Common::Exception() << "lookupLinear got a NaN, this is gonna segfault if i try to look it up";
 		return Tensor::vec<real,3>(127,127,127);
 	}
-	real i = f*(m.size()-1);
+	real i = f * (m.size() - 1);
 	int j = (int)i;
 	real s = i - j;
 	if (j == m.size() - 1) {
 		s = 1;
-		j = m.size()-2;
+		j = m.size() - 2;
 	}
 	return m[j] * (1 - s) + m[j+1] * s;
 };
@@ -101,6 +101,10 @@ auto makeEquirectangular(Tensor::int2 size) {
 auto clamp(auto x, auto a, auto b) {
 	return std::max(std::min(x, b), a);
 }
+
+// TODO instad of clamp, how about a valid mask?
+// instead of a valid mask, how about just test for nans?
+// but thats a lot of tests ...
 
 template<typename real, bool squareTheCircle = false>
 auto makeAzimuthalEquiDist(Tensor::int2 size) {
@@ -160,6 +164,49 @@ int main() {
 	using real2x2 = Tensor::mat<real,2,2>;
 
 	srand(time(0));
+
+
+	std::array landGrad = {
+		// doubled for snowlevel
+		real3(0x27, 0xa5, 0x2a),
+		real3(0x34, 0x88, 0x3b),
+		real3(0x9a, 0xa7, 0x35),
+		real3(0xf2, 0xb3, 0x04),
+		real3(0xbf, 0x4a, 0x06),
+		real3(0x87, 0x09, 0x00),
+		real3(0x73, 0x19, 0x02),
+
+		// thie normal grad
+		real3(0x27, 0xa5, 0x2a),
+		real3(0x34, 0x88, 0x3b),
+		real3(0x9a, 0xa7, 0x35),
+		real3(0xf2, 0xb3, 0x04),
+		real3(0xbf, 0x4a, 0x06),
+		real3(0x87, 0x09, 0x00),
+		real3(0x73, 0x19, 0x02),
+	};
+
+	std::array seaGrad = {
+		real3(0x00, 0x00, 0xff),
+		real3(0x00, 0x00, 0x3f),
+	};
+
+	std::array snowGrad = {
+		real3(0xcf, 0xcf, 0xcf),
+		real3(0xff, 0xff, 0xff),
+	};
+
+	std::array iceGrad = {
+		real3(0x9f, 0x9f, 0xcf),
+		real3(0xcf, 0xcf, 0xff),
+	};
+
+	std::array tempGrad = {
+		real3(0, 0, 0xff),
+		real3(0xff, 0xff, 0xff),
+		real3(0xff, 0, 0),
+	};
+
 
 #if 1
 	auto size = int2(2,1) * 1080;	// 2:1 for equirectangular
@@ -325,13 +372,15 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 	auto temps = Grid<real, 2>(size, [&](int2 i) -> real {
 		auto [lon, lat] = lonlat(i);
 		// https://commons.wikimedia.org/wiki/File:Relationship_between_latitude_vs._temperature_and_precipitation.png
-		return 25. - 30. * sqr(lat/(M_PI*.5));	// in Celsius
+		return 27. - 50. * sqr(lat/(M_PI*.5));	// in Celsius
 	});
 
 	// ... decrease temp at land (dont at sea)
 	for (auto i : temps.range()) {
-		if (hs(i) < 0) {
-			temps(i) += 10; // land temps about 10 degrees C less than sea temps
+		real h = hs(i);
+		if (h < 0) {
+			temps(i) -= 100 * h; // land temps about 10 degrees C less than sea temps
+			// TODO also vary by sea depth?
 		}
 	}
 
@@ -374,44 +423,17 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 		std::cout << "land area percent by 2D projection " << (landAreaBy2D / (real)size.product() * 100) << "%" << std::endl;
 	}
 
-	std::array landGrad = {
-		real3(0x27, 0xa5, 0x2a),
-		real3(0x34, 0x88, 0x3b),
-		real3(0x9a, 0xa7, 0x35),
-		real3(0xf2, 0xb3, 0x04),
-		real3(0xbf, 0x4a, 0x06),
-		real3(0x87, 0x09, 0x00),
-		real3(0x73, 0x19, 0x02),
-	};
-
-	std::array seaGrad = {
-		real3(0x00, 0x00, 0xff),
-		real3(0x00, 0x00, 0x3f),
-	};
-
-	std::array snowGrad = {
-		real3(0xcf, 0xcf, 0xcf),
-		real3(0xff, 0xff, 0xff),
-	};
-
-	std::array iceGrad = {
-		real3(0x7f, 0x7f, 0xff),
-		real3(0xcf, 0xcf, 0xff),
-	};
-
-	std::array tempGrad = {
-		real3(0, 0, 0xff),
-		real3(0xff, 0, 0),
-	};
-
 	{
-		auto tempRange = getrange(temps);
+		//auto tempRange = getrange(temps);
 		auto img = std::make_shared<Image::Image>(size);
 		for (auto i : temps.range()) {
 			real temp = temps(i);
-			real3 c = lookupLinear(tempGrad, (temp - tempRange[0]) / (tempRange[1] - tempRange[0]));
+			//real f = (temp - tempRange[0]) / (tempRange[1] - tempRange[0]);
+			real f = clamp((temp / 30. + 1.) * .5, 0., 1.);
+			real3 c = lookupLinear(tempGrad, f);
 			*(uchar3*)&(*img)(i.x, i.y) = (uchar3)c;
 		}
+		//std::cout << "temp range " << tempRange << std::endl;
 		Image::system->write("temp.png", img);
 	}
 	
