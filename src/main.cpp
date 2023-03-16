@@ -292,8 +292,8 @@ int main() {
 		real3(0xff, 0, 0),
 	};
 
-	//int n = 1080;
-	int n = 360;
+	int n = 1080;
+	//int n = 360;
 
 	// TODO with each of these I need border-wrap functions
 	auto charts = std::map<std::string, std::shared_ptr<Chart<real>>>();
@@ -305,9 +305,9 @@ int main() {
 	charts["equi-diag-poles-at-corners"] = std::make_shared<PolesAtCornersChart<real>>(int2(n,n));
 	charts["equi-diag-round-square"] = std::make_shared<PolesAtCornersButRoundChart<real>>(int2(n,n));
 
-	//auto chart = charts["equi-rect"];
+	auto chart = charts["equi-rect"];
 	//auto chart = charts["azi-equi-dist"];
-	auto chart = charts["equi-diag-round-square"];
+	//auto chart = charts["equi-diag-round-square"];
 	
 	int2 size = chart->size;
 	auto lonlat = chart->makeLonLat();
