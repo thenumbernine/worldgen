@@ -32,6 +32,7 @@ auto getrange(Tensor::Grid<T, N> const & m) {
 template<typename real, typename Grid>
 auto gaussian(
 	Grid const & A,
+	auto chart,	//used for wrap function
 	int kernelSize,
 	real sigma,
 	auto calcMetric
@@ -46,7 +47,7 @@ auto gaussian(
 		for (int u = -kernelSize; u <= kernelSize; ++u) {
 			for (int v = -kernelSize; v <= kernelSize; ++v) {
 				auto uv = real2{(real)u, (real)v};
-				int2 srcij = ((int2)((real2)ij + uv) + size) % size;
+				int2 srcij = chart->wrap((int2)((real2)ij + uv));
 				auto g = calcMetric(srcij);
 				real dsq = uv * g * uv;
 				real area = determinant(g);
@@ -116,13 +117,25 @@ struct EquirectangularChart : public Chart<real> {
 	using LonLatGrid = Super::LonLatGrid;
 	LonLatGrid makeLonLat() const {
 		return LonLatGrid(Super::size, [&](int2 i) {
-			real lon = ((i.x - .5)/(real)Super::size.x - .5) * M_PI * 2.;// [-pi, pi]
-			real lat = ((i.y - .5)/(real)Super::size.y - .5) * M_PI;		// [-pi/2, pi/2]
+			real lon = ((i.x - .5) / (real)Super::size.x - .5) * M_PI * 2.;		// [-pi, pi]
+			real lat = ((i.y - .5) / (real)Super::size.y - .5) * M_PI;			// [-pi/2, pi/2]
 			return real2{lon, lat};
 		});
 	}
 	int2 wrap(int2 i) const {
-		return (i + Super::size) % Super::size;
+		i.x = (i.x + Super::size.x) % Super::size.x;
+		// y is dif .. if we go abbove the north pole then we come down the opposite side
+		while (i.y < 0 || i.y >= Super::size.y) {
+			if (i.y < 0) {
+				i.y = -i.y;
+			} else if (i.y >= Super::size.y) {
+				i.y = Super::size.y-1 - i.y;
+				i.y = -i.y;
+				i.y = Super::size.y-1 - i.y;
+			}
+			i.x = Super::size.x - 1 - i.x;
+		}
+		return i;
 	}
 };
 
@@ -216,24 +229,67 @@ struct PolesAtCornersButRoundChart : public Chart<real> {
 	LonLatGrid makeLonLat() const {
 		return LonLatGrid(Super::size, [&](int2 i) {
 			real2 f = (((real2)i + .5)/(real2)Super::size - .5) * 2.;	//[-1,1]^2
-			f.y = -f.y;		// flip y either here or in image write
 			real lat = f * real2(.5, .5);	// [-1,1] dist along diag dl->ur
 			real lon = f * real2(-.5, .5);	// [-1,1] dist along diag dr->ul
 			
-			// TODO will lon go oob if I do this?
-			// I think I need to use atan for the longitude ...
-			real div = 1. - lat*lat;
+			real div = 1. - fabs(lat);
 			if (div != 0) lon /= div;
 			
 			lat = clamp(lat, -1., 1.);
 			lon = clamp(lon, -1., 1.);
+			//lat = cbrt(lat);
+			//lon = sin(lon * M_PI * .5);
+			lon = asin(lon) / (M_PI * .5);
 			lat = sin(lat * M_PI * .5);
+			//lat = asin(lat) / (M_PI * .5);
 			lat *= M_PI * .5;
 			lon *= M_PI;
 			return real2{lon, lat};
 		});
 	}
 	int2 wrap(int2 i) const {
+		while (true) {
+			int up = -i.y;
+			int left = -i.x;
+			int down = i.y - (Super::size.y-1);
+			int right = i.x - (Super::size.x-1);
+			if (up <= 0 && down <= 0 && left <= 0 && right <= 0) break;
+			if (up >= 0 && left >= 0) {
+				i = int2(0,0);
+				//i = int2(left,up);
+				break;
+			} else if (up >= 0 && right >= 0) {
+				i = int2(Super::size.x-1, 0);
+				//i = int2(Super::size.x-1-right, up);
+				break;
+			} else if (down >= 0 && left >= 0) {
+				i = int2(0, Super::size.y-1);
+				//i = int2(left, Super::size.y-1-down);
+				break;
+			} else if (down >= 0 && right >= 0) {
+				i = int2(Super::size.x-1, Super::size.y-1);
+				//i = int2(Super::size.x-1-right, Super::size.y-1-down);
+				break;
+			} else if (up >= down && up >= left && up >= right) {	// up goes left
+				i = int2(-i.y, i.x);
+			} else if (left >= up && left >= down && left >= right) {	// left goes up
+				i = int2(i.y, -i.x);
+			} else if (down >= up && down >= left && down >= right) {	// down goes right
+				i.x = Super::size.x - 1 - i.x;
+				i.y = Super::size.x - 1 - i.y;
+				i = int2(-i.y, i.x);
+				i.x = Super::size.x - 1 - i.x;
+				i.y = Super::size.x - 1 - i.y;
+			} else if (right >= up && right >= down && right >= left) {	// right goes down
+				i.x = Super::size.x - 1 - i.x;
+				i.y = Super::size.x - 1 - i.y;
+				i = int2(i.y, -i.x);
+				i.x = Super::size.x - 1 - i.x;
+				i.y = Super::size.x - 1 - i.y;
+			} else {
+				throw Common::Exception() << "here " << i;
+			}
+		}
 		// TODO wrap around corners and flip direction
 		// determine which offset is the highest
 		// wrap according to that edge
@@ -292,8 +348,13 @@ int main() {
 		real3(0xff, 0, 0),
 	};
 
-	int n = 1080;
-	//int n = 360;
+	std::array bwGrad = {
+		real3(0,0,0),
+		real3(0xff,0xff,0xff),
+	};
+
+	//int n = 1080;
+	int n = 360;
 
 	// TODO with each of these I need border-wrap functions
 	auto charts = std::map<std::string, std::shared_ptr<Chart<real>>>();
@@ -305,9 +366,9 @@ int main() {
 	charts["equi-diag-poles-at-corners"] = std::make_shared<PolesAtCornersChart<real>>(int2(n,n));
 	charts["equi-diag-round-square"] = std::make_shared<PolesAtCornersButRoundChart<real>>(int2(n,n));
 
-	auto chart = charts["equi-rect"];
+	//auto chart = charts["equi-rect"];
 	//auto chart = charts["azi-equi-dist"];
-	//auto chart = charts["equi-diag-round-square"];
+	auto chart = charts["equi-diag-round-square"];
 	
 	int2 size = chart->size;
 	auto lonlat = chart->makeLonLat();
@@ -329,11 +390,13 @@ int main() {
 		//real dlat = M_PI/(real)size.y * cos(lat);
 		//return {dlon, dlat};
 		//// numerical ...
-		int2 ijL = (ij - 1 + size) % size;
-		int2 ijR = (ij + 1) % size;
+		int2 ijxL = chart->wrap(ij - int2(1,0));
+		int2 ijxR = chart->wrap(ij + int2(1,0));
+		int2 ijyL = chart->wrap(ij - int2(0,1));
+		int2 ijyR = chart->wrap(ij + int2(0,1));
 		return {
-			(pts(int2{ijR.x, ij.y}) - pts(int2{ijL.x, ij.y})).length() / 2.,
-			(pts(int2{ij.x, ijR.y}) - pts(int2{ij.x, ijL.y})).length() / 2.,
+			(pts(ijxR) - pts(ijxL)).length() / 2.,
+			(pts(ijyR) - pts(ijyL)).length() / 2.,
 		};
 	});
 
@@ -380,17 +443,19 @@ std::cout << "initial h range " << getrange(hs) << std::endl;
 			for (auto ij : hs.range()) {
 				// TODO error when sampling across the poles
 				// needs proper gradient / look up mirror / repeat operations
-				int2 ijL = (ij - 1 + size) % size;
-				int2 ijR = (ij + 1) % size;
+				int2 ijxL = chart->wrap(ij - int2(1,0));
+				int2 ijxR = chart->wrap(ij + int2(1,0));
+				int2 ijyL = chart->wrap(ij - int2(0,1));
+				int2 ijyR = chart->wrap(ij + int2(0,1));
 				auto [dlon, dlat] = dxs(ij);
 				auto grad = real2{
-					(hs(int2{ijR.x, ij.y}) - hs(int2{ijL.x, ij.y})) / (2. * dlon),
-					(hs(int2{ij.x, ijR.y}) - hs(int2{ij.x, ijL.y})) / (2. * dlat),
+					(hs(ijxR) - hs(ijxL)) / (2. * dlon),
+					(hs(ijyR) - hs(ijyL)) / (2. * dlat),
 				}.normalize();
 				auto h = hs(ij);
 				auto some = h * frand();
 				nhs(ij) -= some;
-				int2 dstij = ((int2)((real2)ij + grad) + size) % size;
+				int2 dstij = chart->wrap((int2)((real2)ij + grad));
 				nhs(dstij) += some;
 			}
 			hs = nhs;
@@ -398,7 +463,7 @@ std::cout << "initial h range " << getrange(hs) << std::endl;
 	}
 
 // nah cuz blur undoes the erosion ...
-//	hs = gaussian<real>(hs, 10, 100, [&](int2 ij) { return metrics(ij); });
+//	hs = gaussian<real>(hs, chart, 10, 100, [&](int2 ij) { return metrics(ij); });
 
 	// use histogram to determine sealevel at 70% lowest height of all land
 // why is this putting random water dots everywhere?
@@ -464,7 +529,7 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 
 	// blur to get rid of hard edges from land/sea boundary
 	// TODO gaussian around border is problematic ... each chart will need its own accessor
-	temps = gaussian<real>(temps, 10, 100, [&](int2 ij) { return metrics(ij); });
+	temps = gaussian<real>(temps, chart, 10, 100, [&](int2 ij) { return metrics(ij); });
 
 	// TODO blur
 	// then blur/smooth/diffuse temp
@@ -500,6 +565,18 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 		std::cout << "total area error by sphere " << fabs(1. - totalArea / (4 * M_PI)) << std::endl;
 		std::cout << "land area percent by sphere " << (landArea / totalArea * 100) << "%" << std::endl;
 		std::cout << "land area percent by 2D projection " << (landAreaBy2D / (real)size.product() * 100) << "%" << std::endl;
+	}
+
+	{
+		auto lonimg = std::make_shared<Image::Image>(size);
+		auto latimg = std::make_shared<Image::Image>(size);
+		for (auto i : lonlat.range()) {
+			auto [lon, lat] = lonlat(i);
+			*(uchar3*)&(*lonimg)(i.x, i.y) = (uchar3)lookupLinear(bwGrad, lon / (2. * M_PI) + .5);
+			*(uchar3*)&(*latimg)(i.x, i.y) = (uchar3)lookupLinear(bwGrad, lat / M_PI + .5);
+		}
+		Image::system->write("lon.png", lonimg);
+		Image::system->write("lat.png", latimg);
 	}
 
 	{
