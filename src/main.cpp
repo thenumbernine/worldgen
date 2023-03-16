@@ -13,6 +13,11 @@ auto deg(auto x) { return x * 180. / M_PI; }
 auto round(auto x) { return floor(x + .5); }
 auto sqr(auto x) { return x*x; };
 
+auto clamp(auto x, auto a, auto b) {
+	return std::max(std::min(x, b), a);
+}
+
+
 template<typename T, int N>
 auto getrange(Tensor::Grid<T, N> const & m) {
 	T vmin = INFINITY;
@@ -89,71 +94,152 @@ auto lookupLinear(auto m, real f) {
 };
 
 
-template<typename real>
-auto makeEquirectangular(Tensor::int2 size) {
-	return Tensor::Grid<Tensor::vec<real,2>, 2>(size, [&](Tensor::int2 i) {
-		real lon = ((i.x - .5)/(real)size.x - .5) * M_PI * 2.;// [-pi, pi]
-		real lat = ((i.y - .5)/(real)size.y - .5) * M_PI;		// [-pi/2, pi/2]
-		return Tensor::vec<real,2>{lon, lat};
-	});
-}
+template<typename real_>
+struct Chart {
+	using real = real_;
+	using int2 = Tensor::int2;
+	using real2 = Tensor::vec<real,2>;
+	using LonLatGrid = Tensor::Grid<real2, 2>;
+	int2 size;
+	Chart(int2 size_) : size(size_) {}
+	virtual ~Chart() {}
+	virtual LonLatGrid makeLonLat() const = 0;
+	virtual int2 wrap(int2 i) const = 0;
+};
 
-auto clamp(auto x, auto a, auto b) {
-	return std::max(std::min(x, b), a);
-}
+template<typename real>
+struct EquirectangularChart : public Chart<real> {
+	using Super = Chart<real>;
+	using Super::Super;
+	using int2 = Super::int2;
+	using real2 = Super::real2;
+	using LonLatGrid = Super::LonLatGrid;
+	LonLatGrid makeLonLat() const {
+		return LonLatGrid(Super::size, [&](int2 i) {
+			real lon = ((i.x - .5)/(real)Super::size.x - .5) * M_PI * 2.;// [-pi, pi]
+			real lat = ((i.y - .5)/(real)Super::size.y - .5) * M_PI;		// [-pi/2, pi/2]
+			return real2{lon, lat};
+		});
+	}
+	int2 wrap(int2 i) const {
+		return (i + Super::size) % Super::size;
+	}
+};
 
 // TODO instad of clamp, how about a valid mask?
 // instead of a valid mask, how about just test for nans?
 // but thats a lot of tests ...
-
-template<typename real, bool squareTheCircle = false>
-auto makeAzimuthalEquiDist(Tensor::int2 size) {
-	using real2 = Tensor::vec<real,2>;
-	return Tensor::Grid<real2, 2>(size, [&](Tensor::int2 i) {
-		real2 f = (((real2)i + .5)/(real2)size - .5) * 2.;	//[-1,1]^2
-		if (squareTheCircle) {	//square the circle	
-			real maxp = std::max(fabs(f.x), fabs(f.y));
-			real maxf = maxp == 0 ? 0 : (f / maxp).length();
-			f /= maxf;
-		}
-		real r = f.length();
-		r = std::min(r, .999);
-		real lat = (r - .5) * M_PI;
-		real lon = atan2(f.y, f.x);
-		return Tensor::vec<real,2>{lon, lat};
-	});
-}
-
-template<typename real>
-auto makeLambertAzimuthalEquiArea(Tensor::int2 size) {
-	using real2 = Tensor::vec<real,2>;
-	return Tensor::Grid<real2, 2>(size, [&](Tensor::int2 i) {
-		real2 f = (((real2)i + .5)/(real2)size - .5) * 2.;	//[-1,1]^2
-		real r = f.length();
-		r = std::min(r, .999);
-		r = asin(r) / (.5 * M_PI);
-		real lat = (r - .5) * M_PI;
-		real lon = atan2(f.y, f.x);
-		return Tensor::vec<real,2>{lon, lat};
-	});
-}
+template<typename real, bool squareTheCircle>
+struct AzimuthalEquiDistChart : public Chart<real> {
+	using Super = Chart<real>;
+	using Super::Super;
+	using int2 = Super::int2;
+	using real2 = Super::real2;
+	using LonLatGrid = Super::LonLatGrid;
+	LonLatGrid makeLonLat() const {
+		return LonLatGrid(Super::size, [&](int2 i) {
+			real2 f = (((real2)i + .5)/(real2)Super::size - .5) * 2.;	//[-1,1]^2
+			if (squareTheCircle) {	//square the circle	
+				real maxp = std::max(fabs(f.x), fabs(f.y));
+				real maxf = maxp == 0 ? 0 : (f / maxp).length();
+				f /= maxf;
+			}
+			real r = f.length();
+			r = std::min(r, .999);
+			real lat = (r - .5) * M_PI;
+			real lon = atan2(f.y, f.x);
+			return real2{lon, lat};
+		});
+	}
+	int2 wrap(int2 i) const {
+		return Tensor::clamp(i, int2{}, Super::size-1);
+	}
+};
 
 template<typename real>
-auto makePolesAtCorners(Tensor::int2 size) {
-	using real2 = Tensor::vec<real,2>;
-	return Tensor::Grid<real2, 2>(size, [&](Tensor::int2 i) {
-		real2 f = (((real2)i + .5)/(real2)size - .5) * 2.;	//[-1,1]^2
-		real lat = f * real2(-.5, .5);	// flip y either here or in image write
-		real lon = f * real2(.5, .5);
-		real div = 1. - fabs(lat);
-		if (div != 0) lon /= div;
-		lat = clamp(lat, -1., 1.);
-		lon = clamp(lon, -1., 1.);
-		lat *= M_PI * .5;
-		lon *= M_PI;
-		return Tensor::vec<real,2>{lon, lat};
-	});
-}
+struct LambertAzimuthalEquiAreaChart : public Chart<real> {
+	using Super = Chart<real>;
+	using Super::Super;
+	using int2 = Super::int2;
+	using real2 = Super::real2;
+	using LonLatGrid = Super::LonLatGrid;
+	LonLatGrid makeLonLat() const {
+		return LonLatGrid(Super::size, [&](int2 i) {
+			real2 f = (((real2)i + .5)/(real2)Super::size - .5) * 2.;	//[-1,1]^2
+			real r = f.length();
+			r = std::min(r, .999);
+			r = asin(r) / (.5 * M_PI);
+			real lat = (r - .5) * M_PI;
+			real lon = atan2(f.y, f.x);
+			return real2{lon, lat};
+		});
+	}
+	int2 wrap(int2 i) const {
+		return Tensor::clamp(i, int2{}, Super::size-1);
+	}
+};
+
+template<typename real>
+struct PolesAtCornersChart : public Chart<real> {
+	using Super = Chart<real>;
+	using Super::Super;
+	using int2 = Super::int2;
+	using real2 = Super::real2;
+	using LonLatGrid = Super::LonLatGrid;
+	LonLatGrid makeLonLat() const {
+		return LonLatGrid(Super::size, [&](int2 i) {
+			real2 f = (((real2)i + .5)/(real2)Super::size - .5) * 2.;	//[-1,1]^2
+			real lat = f * real2(-.5, .5);	// flip y either here or in image write
+			real lon = f * real2(.5, .5);
+			real div = 1. - fabs(lat);
+			if (div != 0) lon /= div;
+			lat = clamp(lat, -1., 1.);
+			lon = clamp(lon, -1., 1.);
+			lat *= M_PI * .5;
+			lon *= M_PI;
+			return real2{lon, lat};
+		});
+	}
+	int2 wrap(int2 i) const {
+		// TODO wrap around corners and flip direction
+		return (i + Super::size - 1) % Super::size;
+	}
+};
+
+template<typename real>
+struct PolesAtCornersButRoundChart : public Chart<real> {
+	using Super = Chart<real>;
+	using Super::Super;
+	using int2 = Super::int2;
+	using real2 = Super::real2;
+	using LonLatGrid = Super::LonLatGrid;
+	LonLatGrid makeLonLat() const {
+		return LonLatGrid(Super::size, [&](int2 i) {
+			real2 f = (((real2)i + .5)/(real2)Super::size - .5) * 2.;	//[-1,1]^2
+			f.y = -f.y;		// flip y either here or in image write
+			real lat = f * real2(.5, .5);	// [-1,1] dist along diag dl->ur
+			real lon = f * real2(-.5, .5);	// [-1,1] dist along diag dr->ul
+			
+			// TODO will lon go oob if I do this?
+			// I think I need to use atan for the longitude ...
+			real div = 1. - lat*lat;
+			if (div != 0) lon /= div;
+			
+			lat = clamp(lat, -1., 1.);
+			lon = clamp(lon, -1., 1.);
+			lat = sin(lat * M_PI * .5);
+			lat *= M_PI * .5;
+			lon *= M_PI;
+			return real2{lon, lat};
+		});
+	}
+	int2 wrap(int2 i) const {
+		// TODO wrap around corners and flip direction
+		// determine which offset is the highest
+		// wrap according to that edge
+		return (i + Super::size - 1) % Super::size;
+	}
+};
 
 int main() {
 	using namespace WorldGen;
@@ -164,7 +250,6 @@ int main() {
 	using real2x2 = Tensor::mat<real,2,2>;
 
 	srand(time(0));
-
 
 	std::array landGrad = {
 		// doubled for snowlevel
@@ -207,32 +292,25 @@ int main() {
 		real3(0xff, 0, 0),
 	};
 
+	//int n = 1080;
+	int n = 360;
 
-#if 1
-	auto size = int2(2,1) * 1080;	// 2:1 for equirectangular
-#endif
-#if 0
-	auto size = int2(1080);			// 1:1 for everything else
-#endif
+	// TODO with each of these I need border-wrap functions
+	auto charts = std::map<std::string, std::shared_ptr<Chart<real>>>();
+	charts["equi-rect"] = std::make_shared<EquirectangularChart<real>>(int2(2*n,n));
+	charts["equi-square"] = std::make_shared<EquirectangularChart<real>>(int2(n,n));
+	charts["azi-equi-dist"] = std::make_shared<AzimuthalEquiDistChart<real, false>>(int2(n,n));
+	charts["azi-equi-dist-square"] = std::make_shared<AzimuthalEquiDistChart<real, true>>(int2(n,n));
+	charts["azi-equi-area"] = std::make_shared<LambertAzimuthalEquiAreaChart<real>>(int2(n,n));
+	charts["equi-diag-poles-at-corners"] = std::make_shared<PolesAtCornersChart<real>>(int2(n,n));
+	charts["equi-diag-round-square"] = std::make_shared<PolesAtCornersButRoundChart<real>>(int2(n,n));
 
-#if 0	//equirectangular 2x1 (same as nasa bluemarble pics?)
-	auto lonlat = makeEquirectangular<real>(size);
-#endif
-#if 1	//equi-square
-	auto lonlat = makeEquirectangular<real>(size);
-#endif
-#if 0	// azimuthal equi-dist circle
-	auto lonlat = makeAzimuthalEquiDist<real, false>(size);
-#endif
-#if 0
-	auto lonlat = makeLambertAzimuthalEquiArea<real>(size);
-#endif
-#if 0	// azimuthal equi-dist square
-	auto lonlat = makeAzimuthalEquiDist<real, true>(size);
-#endif
-#if 0 // square with poles at corners
-	auto lonlat = makePolesAtCorners<real>(size);
-#endif
+	//auto chart = charts["equi-rect"];
+	//auto chart = charts["azi-equi-dist"];
+	auto chart = charts["equi-diag-round-square"];
+	
+	int2 size = chart->size;
+	auto lonlat = chart->makeLonLat();
 
 	//sphere pts
 	auto pts = Grid<real3, 2>(size, [&](int2 is) {
@@ -385,6 +463,7 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 	}
 
 	// blur to get rid of hard edges from land/sea boundary
+	// TODO gaussian around border is problematic ... each chart will need its own accessor
 	temps = gaussian<real>(temps, 10, 100, [&](int2 ij) { return metrics(ij); });
 
 	// TODO blur
