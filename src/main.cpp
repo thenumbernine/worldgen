@@ -1,3 +1,5 @@
+#include <string>
+#include <filesystem>
 #include <stdlib.h>
 #include <time.h>
 #include "Tensor/Tensor.h"
@@ -6,6 +8,7 @@
 #include "WorldGen/Noise.h"
 #include "Image/Image.h"
 #include "Common/Macros.h"
+#include "Common/File.h"
 
 
 auto rad(auto x) { return x * M_PI / 180.; }
@@ -152,7 +155,7 @@ struct AzimuthalEquiDistChart : public Chart<real> {
 	LonLatGrid makeLonLat() const {
 		return LonLatGrid(Super::size, [&](int2 i) {
 			real2 f = (((real2)i + .5)/(real2)Super::size - .5) * 2.;	//[-1,1]^2
-			if (squareTheCircle) {	//square the circle	
+			if (squareTheCircle) {	//square the circle
 				real maxp = std::max(fabs(f.x), fabs(f.y));
 				real maxf = maxp == 0 ? 0 : (f / maxp).length();
 				f /= maxf;
@@ -231,10 +234,10 @@ struct PolesAtCornersButRoundChart : public Chart<real> {
 			real2 f = (((real2)i + .5)/(real2)Super::size - .5) * 2.;	//[-1,1]^2
 			real lat = f * real2(.5, .5);	// [-1,1] dist along diag dl->ur
 			real lon = f * real2(-.5, .5);	// [-1,1] dist along diag dr->ul
-			
+
 			real div = 1. - fabs(lat);
 			if (div != 0) lon /= div;
-			
+
 			lat = clamp(lat, -1., 1.);
 			lon = clamp(lon, -1., 1.);
 			//lat = cbrt(lat);
@@ -367,12 +370,12 @@ int main() {
 	charts["equi-diag-poles-at-corners"] = std::make_shared<PolesAtCornersChart<real>>(int2(n,n));
 	charts["equi-diag-round-square"] = std::make_shared<PolesAtCornersButRoundChart<real>>(int2(n,n));
 
-	auto chart = charts["equi-square"];
-	//auto chart = charts["equi-rect"];
+	//auto chart = charts["equi-square"];
+	auto chart = charts["equi-rect"];
 	//auto chart = charts["azi-equi-dist"];
 	//auto chart = charts["equi-diag-round-square"];
 	//auto chart = charts["equi-diag-poles-at-corners"];
-	
+
 	int2 size = chart->size;
 	auto lonlat = chart->makeLonLat();
 
@@ -474,12 +477,12 @@ std::cout << "initial h range " << getrange(hs) << std::endl;
 	{
 		int numbins = 200;
 		auto [bins, hrange] = histogram<real>(hs, numbins, [&](int2 i) { return areas(i); });
-std::cout << "histogram range " << hrange << std::endl;	
-//std::cout << "histogram bins " << bins << std::endl;	
-		//now add up bins from lowest until we reach 
+std::cout << "histogram range " << hrange << std::endl;
+//std::cout << "histogram bins " << bins << std::endl;
+		//now add up bins from lowest until we reach
 		real total = std::accumulate(bins.begin(), bins.end(), (real)0, std::plus());
 		// total should be 4 pi
-std::cout << "histogram total " << total << std::endl;	
+std::cout << "histogram total " << total << std::endl;
 		real target = total * .71;	// % water
 		real sofar = 0;
 		int i = 0;
@@ -492,12 +495,12 @@ std::cout << "histogram total " << total << std::endl;
 		}
 std::cout << "based on bins, land % should be: " << ((1. - sofar / total) * 100.) << "%" << std::endl;
 		real hsealevel = (real)i / (real)numbins * (hrange[1] - hrange[0]) + hrange[0];
-std::cout << "hsealevel " << hsealevel << std::endl;		
+std::cout << "hsealevel " << hsealevel << std::endl;
 // why is this putting random water dots everywhere?
 		//for (auto & h : hs) h -= hsealevel;
 		for (auto i : hs.range()) hs(i) -= hsealevel;
 	}
-#endif 
+#endif
 
 #if 1	// normalize altitude to [-1,1] while maintaining 0 (since it is at our desired land covering %age)
 	{
@@ -595,13 +598,14 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 		//std::cout << "temp range " << tempRange << std::endl;
 		Image::system->write("temp.png", img);
 	}
-	
+
+#if 0
 	// hmm, I've got my Image library, and I've got my matrix lua library, and I've got my matrix ffi library ... hmmmmmmm
 	auto img = std::make_shared<Image::Image>(size);
 	for (auto i : hs.range()) {
 		real h = hs(i);
 		real temp = temps(i);
-		
+
 		real3 c;
 		if (h < 0) {
 			if (temp < 0) {
@@ -619,4 +623,64 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 		*(uchar3*)&(*img)(i.x, i.y) = (uchar3)c;
 	}
 	Image::system->write("out.png", img);
+#else
+	// attempt to convert it to a voxel sphere ...
+	std::vector<uint32_t> v;
+	int voxelSize = 144;
+	v.push_back(voxelSize);
+	v.push_back(voxelSize);
+	v.push_back(voxelSize);
+	for (int k = 0; k < voxelSize; ++k) {
+		real z = (real(k) + .5) / real(voxelSize);
+		for (int j = 0; j < voxelSize; ++j) {
+			real y = (real(j) + .5) / real(voxelSize);
+			for (int i = 0; i < voxelSize; ++i) {
+				real x = (real(i) + .5) / real(voxelSize);
+
+				real r = sqrt(x*x + y*y + z*z);
+				if (r >= voxelSize/2-1) {
+					v.push_back(0xffffffff);
+				} else {
+					real theta = acos(z / r);
+					real phi = atan2(y, x);
+					int2 ij(
+						theta / M_PI * (size.y-1) + .5,
+						phi / (2. * M_PI) * (size.x-1) + .5
+					);
+
+					real h = hs(ij);
+					real temp = temps(ij);
+
+					if (h < 0) {
+						if (temp < 0) {
+							// ice based on -h
+							v.push_back(0);
+						} else {
+							// sea based on -h
+							v.push_back(1);
+						}
+					} else {
+						if (temp < 0) {
+							// snow based on h
+							v.push_back(0);
+						} else {
+							// land based on h
+							v.push_back(1);
+						}
+					}
+				}
+			}
+		}
+	}
+	auto shouldBe = voxelSize * voxelSize * voxelSize + 3;
+	if (v.size() != shouldBe) {
+		throw Common::Exception() << "bad size " << v.size() << " should be " << shouldBe;
+	}
+	auto strptr = (char*)v.data();
+	size_t strsize = v.size() * sizeof(uint32_t); //sizeof(decltype(v)::value_type)
+	Common::File::write(
+		std::filesystem::path("out.vox"),
+		std::string(strptr, strsize)
+	);
+#endif
 }
