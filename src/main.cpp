@@ -639,10 +639,14 @@ std::cout << "writing out.vox" << std::endl;
 			real y = (real(j) + .5) / real(voxelSize) - .5;
 			for (int i = 0; i < voxelSize; ++i) {
 				real x = (real(i) + .5) / real(voxelSize) - .5;
-
 				real r = sqrt(x * x + y * y + z * z);
+
 				uint32_t voxType = 0xffffffff;
+#if 0 // spherical
 				if (r < .5) {
+#else // the world is ... cube?
+				{
+#endif
 					real theta = acos(z / r);
 					real phi = atan2(y, x);
 					int2 ij(
