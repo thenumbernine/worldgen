@@ -574,6 +574,7 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 	}
 
 	{
+std::cout << "writing lat.png lon.png" << std::endl;
 		auto lonimg = std::make_shared<Image::Image>(size);
 		auto latimg = std::make_shared<Image::Image>(size);
 		for (auto i : lonlat.range()) {
@@ -586,6 +587,7 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 	}
 
 	{
+std::cout << "writing temp.png" << std::endl;
 		//auto tempRange = getrange(temps);
 		auto img = std::make_shared<Image::Image>(size);
 		for (auto i : temps.range()) {
@@ -625,6 +627,7 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 	Image::system->write("out.png", img);
 #else
 	// attempt to convert it to a voxel sphere ...
+std::cout << "writing out.vox" << std::endl;
 	std::vector<uint32_t> v;
 	int voxelSize = 144;
 	v.push_back(voxelSize);
@@ -637,15 +640,14 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 			for (int i = 0; i < voxelSize; ++i) {
 				real x = (real(i) + .5) / real(voxelSize);
 
-				real r = sqrt(x*x + y*y + z*z);
-				if (r >= voxelSize/2-1) {
-					v.push_back(0xffffffff);
-				} else {
+				real r = sqrt(sqr(x - .5) + sqr(y - .5) + sqr(z - .5));
+				uint32_t voxType = 0xffffffff;
+				if (r < .5) {
 					real theta = acos(z / r);
 					real phi = atan2(y, x);
 					int2 ij(
-						theta / M_PI * (size.y-1) + .5,
-						phi / (2. * M_PI) * (size.x-1) + .5
+						clamp(theta / M_PI, 0., 1.) * (size.x-1),
+						clamp(phi / (2. * M_PI), 0., 1.) * (size.y-1)
 					);
 
 					real h = hs(ij);
@@ -654,33 +656,38 @@ std::cout << "hsealevel " << hsealevel << std::endl;
 					if (h < 0) {
 						if (temp < 0) {
 							// ice based on -h
-							v.push_back(0);
+							voxType = 0x192;
 						} else {
 							// sea based on -h
-							v.push_back(1);
+							voxType = 0x194;
 						}
 					} else {
 						if (temp < 0) {
 							// snow based on h
-							v.push_back(0);
+							voxType = 0x192;
 						} else {
 							// land based on h
-							v.push_back(1);
+							voxType = 0;
 						}
 					}
 				}
+
+				v.push_back(voxType);
 			}
 		}
 	}
+std::cout << "verifying size..." << std::endl;
 	auto shouldBe = voxelSize * voxelSize * voxelSize + 3;
 	if (v.size() != shouldBe) {
 		throw Common::Exception() << "bad size " << v.size() << " should be " << shouldBe;
 	}
+std::cout << "writing..." << std::endl;
 	auto strptr = (char*)v.data();
 	size_t strsize = v.size() * sizeof(uint32_t); //sizeof(decltype(v)::value_type)
 	Common::File::write(
 		std::filesystem::path("out.vox"),
 		std::string(strptr, strsize)
 	);
+std::cout << "...done" << std::endl;
 #endif
 }
