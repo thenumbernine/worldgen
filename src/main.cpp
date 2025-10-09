@@ -601,7 +601,6 @@ std::cout << "writing temp.png" << std::endl;
 		Image::system->write("temp.png", img);
 	}
 
-#if 0
 	// hmm, I've got my Image library, and I've got my matrix lua library, and I've got my matrix ffi library ... hmmmmmmm
 	auto img = std::make_shared<Image::Image>(size);
 	for (auto i : hs.range()) {
@@ -625,7 +624,8 @@ std::cout << "writing temp.png" << std::endl;
 		*(uchar3*)&(*img)(i.x, i.y) = (uchar3)c;
 	}
 	Image::system->write("out.png", img);
-#else
+
+
 	// attempt to convert it to a voxel sphere ...
 std::cout << "writing out.vox" << std::endl;
 	std::vector<uint32_t> v;
@@ -634,20 +634,20 @@ std::cout << "writing out.vox" << std::endl;
 	v.push_back(voxelSize);
 	v.push_back(voxelSize);
 	for (int k = 0; k < voxelSize; ++k) {
-		real z = (real(k) + .5) / real(voxelSize);
+		real z = (real(k) + .5) / real(voxelSize) - .5;
 		for (int j = 0; j < voxelSize; ++j) {
-			real y = (real(j) + .5) / real(voxelSize);
+			real y = (real(j) + .5) / real(voxelSize) - .5;
 			for (int i = 0; i < voxelSize; ++i) {
-				real x = (real(i) + .5) / real(voxelSize);
+				real x = (real(i) + .5) / real(voxelSize) - .5;
 
-				real r = sqrt(sqr(x - .5) + sqr(y - .5) + sqr(z - .5));
+				real r = sqrt(x * x + y * y + z * z);
 				uint32_t voxType = 0xffffffff;
 				if (r < .5) {
 					real theta = acos(z / r);
 					real phi = atan2(y, x);
 					int2 ij(
-						clamp(theta / M_PI, 0., 1.) * (size.x-1),
-						clamp(phi / (2. * M_PI), 0., 1.) * (size.y-1)
+						clamp((phi + M_PI) / (2. * M_PI), 0., 1.) * (size.x-1),
+						clamp(theta / M_PI, 0., 1.) * (size.y-1)
 					);
 
 					real h = hs(ij);
@@ -689,5 +689,4 @@ std::cout << "writing..." << std::endl;
 		std::string(strptr, strsize)
 	);
 std::cout << "...done" << std::endl;
-#endif
 }
