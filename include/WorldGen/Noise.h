@@ -8,12 +8,14 @@
 
 namespace WorldGen {
 
+auto pow4(auto x) { return x * x * x * x; }
+
 template<typename real_>
 struct Noise {
 	using real = real_;
 	using real3 = Tensor::vec<real_,3>;
 	using int3 = Tensor::int3;
-	
+
 	static constexpr real3 grad3[12] = {
 		{1,1,0},{-1,1,0},{1,-1,0},{-1,-1,0},
 		{1,0,1},{-1,0,1},{1,0,-1},{-1,0,-1},
@@ -53,7 +55,6 @@ struct Noise {
 		is[1][sis[2]] = 1;
 		is[2][sis[2]] = 1;
 		is[2][sis[1]] = 1;
-		auto pow4 = [](auto x) { return x * x * x * x; };
 		Tensor::uchar3 ib = i;
 		return 32. * Tensor::tensor<real, 4>([&](int k) -> real {
 			auto const & ik = is[k];
